@@ -86,7 +86,7 @@ export const InputBar = memo(function InputBar({
     () => input === undefined || resolveDraftAttachments === undefined ? [] : resolveDraftAttachments(input.attachmentIds),
     [resolveDraftAttachments, input?.attachmentIds],
   )
-  const empty = draft.trim() === '' && attachments.length === 0
+  const empty = draft.trim() === '' && attachments.length === 0 && input?.hasContributions !== true
   const uploads = useFileUploads(snapshot => snapshot)
   // Send waits for every picked file and every uploading image: uploading and
   // failed drafts both hold the gate (a failed upload is retried or removed,

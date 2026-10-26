@@ -287,6 +287,10 @@ Assembler 会记录这项依赖。如果后续 older prepend 带来了更近的�
 
 `publication` 控制发生 State 变更后何时物化。结构或 terminal 变化使用 `immediate`，高频可见 delta 使用 `animation-frame`，只为后续发布积累 State 时使用 `none`。引擎按日志顺序应用每条 scalar update，并用一次 batch update 应用一个 packed run；该选项只合并视图发布频率。
 
+## 独立输入内容贡献
+
+[Conversation 输入](../../packages/client/ui-conversation/README.zh.md#shell-and-standard-props) 通过 `SessionInput.registerContribution()` 提供 Session 内的 `ComposerContributionSource` 注册。可观察的就绪状态独立于编辑器文字，决定原生发送按钮和 Enter 是否可用。冻结操作保留不可变的用户文字，附在原生引用标签和引用块序列化结果之后，并在 Host 接收、失败或 Session 销毁时结算一次。命令保持独立路径；注销内容源会停止后续冻结，但不放弃已有预留。
+
 ## 验证要求
 
 添加聚焦测试，证明以下结果：

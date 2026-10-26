@@ -130,6 +130,8 @@ When another writer owns the Session, the send-error toast asks the user to quit
 
 Two independent Escape presses in the focused Chat or Composer stop its current running turn and preserve queued messages. The interval comes from the shortcuts plugin’s `stopSequenceMs` configuration (500 ms by default). A menu, approval, modal, terminal, embedded webpage, composition, repeated key, changed input region, Session or turn breaks the sequence. The shortcut uses the same scoped cancellation as the Stop button. The plugin registers Stop as a fixed action in the `input` display group. Its registration reserves plain Escape against editable shortcuts and supplies the `Esc Esc` sequence shown in the Stop button’s hover and keyboard-focus tooltip.
 
+`SessionInput.registerContribution(source)` attaches plugin-owned pending text without editing the composer document. A source publishes readiness through an observable, reserves immutable content synchronously, and receives one success, error, or cancellation settlement. Ready content enables an otherwise empty composer; ordinary messages append it after editor text, while commands leave it pending. A capture failure rolls back prior reservations, an admission failure restores unsent work, and Session disposal cancels outstanding reservations.
+
 <a id="temporary-composer-entries"></a>
 ## Temporary composer entries
 

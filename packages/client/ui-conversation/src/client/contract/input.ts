@@ -13,6 +13,7 @@ import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ArbitrateKey, ArbitrateOutcome, Occurrence, ReferenceInsert, TokenSpan } from './draft-editor.ts'
 import type { InputSubmitMode, MessageSubmission } from './composer-submission.ts'
+import type { ComposerContributionSource } from './composer-contributions.ts'
 
 /** Attachment payload passed to a claimed command submission. */
 export type SubmitAttachment =
@@ -182,6 +183,13 @@ export interface InputTarget {
 
 /** Per-session input facade owned by the conversation wiring layer. */
 export interface SessionInput extends InputTarget {
+  /**
+   * Attach a plugin's independent pending text to ordinary composer submissions.
+   * @param source - Session-local producer; its readiness enables an otherwise empty composer.
+   * @returns disposer removing readiness and future captures; existing reservations still settle.
+   */
+  registerContribution(source: ComposerContributionSource): () => void
+
   /** Insert selected transcript text as an atomic quote. @param text - nonblank selection. @returns whether editing accepted it. */
   insertQuote(text: string): boolean
 
@@ -293,6 +301,8 @@ export type ConsumeTokenGuard = ConsumeTokenRequest['guard']
 
 /** Published input state (the currency; per-session). */
 export interface InputState {
+  /** True when a plugin has independent pending content; absent means none. */
+  readonly hasContributions?: boolean
   /** Clipboard-text projection of the editor document (chips expanded to their clipboard form). */
   readonly draft: string
   /** Ordered runtime-only attachment ids; browser objects stay in ConversationController. */
@@ -338,7 +348,7 @@ export type InputEvent =
   /** The editor inserted a command chip: enter claimed. */
   | { readonly type: 'claim'; readonly claim: CommandClaim }
   /** Enter submission with the current clipboard projection. */
-  | { readonly type: 'enter'; readonly mode: InputSubmitMode; readonly draft: string; readonly submission?: MessageSubmission }
+  | { readonly type: 'enter'; readonly mode: InputSubmitMode; readonly draft: string; readonly hasContributions?: boolean; readonly submission?: MessageSubmission }
   | { readonly type: 'adjudicated'; readonly attempt: SubmitAttempt; readonly outcome: PickOutcome }
   | { readonly type: 'adjudication-failed'; readonly attempt: SubmitAttempt; readonly message: string }
   /** Settlement carries the leading command chip's claim, which the claim follows after a failure. */

@@ -72,7 +72,7 @@ export class SubmitMachine {
     switch (ev.type) {
       case 'draft-changed': return this.followCommand(ev.command)
       case 'claim': return this.followCommand(ev.claim)
-      case 'enter': return this.onEnter(ev.mode, ev.draft, ev.submission)
+      case 'enter': return this.onEnter(ev.mode, ev.draft, ev.submission, ev.hasContributions)
       case 'adjudicated': return this.onAdjudicated(ev.attempt, ev.outcome)
       case 'adjudication-failed': return this.onAdjudicationFailed(ev.attempt, ev.message)
       case 'submit-settled': return this.onSubmitSettled(ev)
@@ -134,7 +134,7 @@ export class SubmitMachine {
     ]
   }
 
-  private onEnter(mode: InputSubmitMode, draft: string, submission?: MessageSubmission): readonly InputEffect[] {
+  private onEnter(mode: InputSubmitMode, draft: string, submission?: MessageSubmission, hasContributions = false): readonly InputEffect[] {
     if (this.phase === 'adjudicating' || this.phase === 'submitting') return []
     if (this.phase === 'claimed' && this.claim !== undefined) {
       const attempt = this.beginAttempt(mode, draft, submission)
@@ -142,7 +142,7 @@ export class SubmitMachine {
       return [{ type: 'begin-submit', attempt, claim: this.claim, args: argsAfter(draft, this.claim.token) }]
     }
     const trimmed = draft.trim()
-    if (trimmed === '') return []
+    if (trimmed === '' && !hasContributions) return []
     if (trimmed.startsWith('/')) {
       const attempt = this.beginAttempt(mode, draft, submission)
       this.phase = 'adjudicating'

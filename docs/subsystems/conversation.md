@@ -285,6 +285,10 @@ With `D` registered Definitions, one incoming scalar event or packed run perform
 
 `publication` controls when changed State is materialized. Use `immediate` for structural or terminal changes, `animation-frame` for high-frequency visible deltas, and `none` when the State change feeds only a later publication. The engine applies every scalar update in log order and every packed run in one batch update; cadence only coalesces view publication.
 
+## Independent composer contributions
+
+The [Conversation input](../../packages/client/ui-conversation/README.md#shell-and-standard-props) exposes Session-local `ComposerContributionSource` registrations through `SessionInput.registerContribution()`. Observable readiness enables native Send and Enter independently of editor text. Captures reserve immutable user text, append it after native reference and quote serialization, and settle once on Host admission, failure, or Session disposal. Commands retain their separate path; unregistering a source removes future captures without abandoning existing reservations.
+
 ## Verification obligations
 
 Add focused tests that establish these outcomes:

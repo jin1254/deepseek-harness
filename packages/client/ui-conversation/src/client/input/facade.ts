@@ -24,6 +24,7 @@ import type {
 } from '../contract/draft-editor.ts'
 import type { InputSubmitMode, MessageSubmission, MessageSubmissionState } from '../contract/composer-submission.ts'
 import { serializeDraftPrompt } from './prompt.ts'
+import type { ComposerContribution, ComposerContributionSource } from '../contract/composer-contributions.ts'
 import { SubmitMachine } from './machine.ts'
 import { resolveDraftInput, snapshotDraft } from '../draft.ts'
 import { DraftEditorRuntime } from './editor/runtime.ts'
@@ -110,6 +111,7 @@ const EMPTY_LEXICON: ReadonlyMap<'/' | '@', readonly string[]> = new Map()
 
 /** Editor and attachment snapshot owned by one detached default send. */
 interface DetachedDraft {
+  readonly contributions: readonly ComposerContribution[]
   readonly draft: string
   readonly occurrences: readonly Occurrence[]
   readonly quotes: readonly DraftQuote[]
@@ -148,6 +150,7 @@ export class SessionInputShell implements SessionInput {
   }
 
   private readonly core = new SubmitMachine()
+  private readonly contributors = new Map<ComposerContributionSource, () => void>()
   private readonly draftEditor: DraftEditorRuntime
   private get projection(): EditorProjection {
     return this.draftEditor.projection
@@ -223,6 +226,49 @@ export class SessionInputShell implements SessionInput {
   }
 
   // ---- SessionInput face ----
+
+  registerContribution(source: ComposerContributionSource): () => void {
+    if (this.disposed) throw new Error('Cannot register a contribution on a disposed Session input')
+    if (this.contributors.has(source)) throw new Error('Composer contribution already registered')
+    const unsubscribe = source.pending.subscribe(() => { this.publish() })
+    this.contributors.set(source, unsubscribe)
+    this.publish()
+    return () => {
+      if (!this.contributors.delete(source)) return
+      unsubscribe()
+      if (!this.disposed) this.publish()
+    }
+  }
+
+  private hasContributions(): boolean {
+    for (const source of this.contributors.keys()) if (source.pending.getSnapshot()) return true
+    return false
+  }
+
+  private captureContributions(): readonly ComposerContribution[] {
+    const captured: ComposerContribution[] = []
+    try {
+      for (const source of this.contributors.keys()) {
+        if (source.pending.getSnapshot()) captured.push(source.capture())
+      }
+      return captured
+    } catch (error) {
+      this.settleContributions(captured, 'error')
+      throw error
+    }
+  }
+
+  private settleContributions(contributions: readonly ComposerContribution[], outcome: Parameters<ComposerContribution['settle']>[0]): void {
+    for (const contribution of contributions) {
+      try { contribution.settle(outcome) }
+      catch (error) { this.notify('error', error instanceof Error ? error.message : String(error)) }
+    }
+  }
+
+  private contributedText(text: string, contributions: readonly ComposerContribution[]): string {
+    return [text.trim(), ...contributions.map(contribution => contribution.text)].filter(part => part !== '').join('\n\n')
+  }
+
 
   /**
    * Replace the whole draft (persisted-draft seed and programmatic writes).
@@ -415,13 +461,14 @@ export class SessionInputShell implements SessionInput {
     if (this.disposed) return
     const timestamp = Date.now()
     let state: MessageSubmissionState | undefined
-    if (this.snapshot.phase === 'plain' && (this.snapshot.draft.trim() !== '' || this.attachmentIds.length > 0)) {
+    const hasContributions = this.hasContributions()
+    if (this.snapshot.phase === 'plain' && (this.snapshot.draft.trim() !== '' || this.attachmentIds.length > 0 || hasContributions)) {
       try { state = this.deps.submissionState?.() } catch (_error) { /* Optional Session observations cannot interrupt submission. */ }
     }
     const submission: MessageSubmission = Object.freeze({
       timestamp, mode, ...source === undefined ? {} : { source }, ...state === undefined ? {} : { state },
     })
-    if (this.snapshot.draft.trim() === '' && this.attachmentIds.length > 0) {
+    if (this.snapshot.draft.trim() === '' && this.attachmentIds.length > 0 && !hasContributions) {
       if (this.snapshot.phase === 'plain') {
         const attachmentIds = [...this.attachmentIds]
         const controller = new AbortController()
@@ -452,7 +499,7 @@ export class SessionInputShell implements SessionInput {
       this.notify('error', this.deps.commandAttachments.unsupportedNotice(before.claim?.token ?? before.draft))
       return
     }
-    this.dispatchRun({ type: 'enter', mode, draft: this.projection.clipboardText, submission })
+    this.dispatchRun({ type: 'enter', mode, draft: this.projection.clipboardText, hasContributions, submission })
     const phase = this.snapshot.phase
     if (phase === 'adjudicating' || phase === 'submitting') {
       this.deps.popup?.()?.dismiss()
@@ -641,6 +688,9 @@ export class SessionInputShell implements SessionInput {
       flight.controller.abort()
     }
     this.disposed = true
+    for (const unsubscribe of this.contributors.values()) unsubscribe()
+    this.contributors.clear()
+    for (const record of this.detachedDrafts.values()) this.settleContributions(record.contributions, 'cancelled')
     this.cancelCommandRestore()
     this.dispatchRun(({ type: 'release' }))
     this.unsubscribeInbox?.()
@@ -767,8 +817,16 @@ export class SessionInputShell implements SessionInput {
     this.attachmentIds = []
     const occurrences = this.projection.occurrences
     const quotes = this.projection.quotes
-    const record = { draft, occurrences, quotes, attachmentIds }
+    let contributions: readonly ComposerContribution[] = []
+    let captureError: unknown
+    let captureFailed = false
+    try { contributions = this.captureContributions() } catch (error) { captureFailed = true; captureError = error }
+    const record = { draft, occurrences, quotes, attachmentIds, contributions }
     this.detachedDrafts.set(attempt.seq, record)
+    if (captureFailed) {
+      this.settleSink(attempt, Promise.reject(captureError instanceof Error ? captureError : new Error(String(captureError))))
+      return
+    }
     if (this.failedRestoreRev === this.rev) {
       this.failedDetached.clear()
       this.failedRestoreRev = undefined
@@ -780,7 +838,11 @@ export class SessionInputShell implements SessionInput {
     })
     const send = (text: string): void => {
       if (this.dead(attempt)) return
-      this.settleSink(attempt, this.deps.defaultSink(text, attachmentIds, mode, attempt.signal))
+      try {
+        this.settleSink(attempt, this.deps.defaultSink(this.contributedText(text, contributions), attachmentIds, mode, attempt.signal))
+      } catch (error) {
+        this.settleDetachedFailure(attempt, error instanceof Error ? error.message : String(error))
+      }
     }
     if (!(prompt instanceof Promise)) { send(prompt); return }
     void prompt.then(send, (error: unknown) => {
@@ -806,7 +868,9 @@ export class SessionInputShell implements SessionInput {
           this.settleDetachedFailure(attempt, outcome.text)
           return
         }
+        const record = this.detachedDrafts.get(attempt.seq)
         this.detachedDrafts.delete(attempt.seq)
+        this.settleContributions(record?.contributions ?? [], 'success')
         this.dispatchRun(({ type: 'sink-settled', attempt, ok: true, outcome }))
       },
       (error: unknown) => {
@@ -821,6 +885,7 @@ export class SessionInputShell implements SessionInput {
     const record = this.detachedDrafts.get(attempt.seq)
     if (record === undefined) return
     this.detachedDrafts.delete(attempt.seq)
+    this.settleContributions(record.contributions, 'error')
     this.restoreAttachments(record.attachmentIds)
     this.failedDetached.set(attempt.seq, record)
     if (this.projection.clipboardText === '' || this.failedRestoreRev === this.rev) {
@@ -939,6 +1004,7 @@ export class SessionInputShell implements SessionInput {
     return {
       draft: this.projection.clipboardText,
       attachmentIds: this.attachmentIds,
+      ...(this.hasContributions() ? { hasContributions: true } : {}),
       draftRev: this.rev,
       phase: core.phase,
       ...(core.claim !== undefined ? { claim: core.claim } : {}),
